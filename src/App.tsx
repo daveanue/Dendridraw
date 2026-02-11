@@ -1,14 +1,12 @@
 /**
  * Dendridraw — Semantic Mindmap Layer on Excalidraw
  *
- * App entry point: initializes the root node on mount,
- * renders the Excalidraw canvas with the toolbar overlay.
+ * App entry point: initializes the root node on mount
+ * and renders the Excalidraw-backed canvas.
  */
 import { useEffect } from 'react';
 import Canvas from './components/Canvas';
-import Toolbar from './components/Toolbar';
 import { useMindmapStore } from './store/mindmapStore';
-import './App.css';
 
 export default function App() {
   const rootId = useMindmapStore((s) => s.rootId);
@@ -21,12 +19,5 @@ export default function App() {
     }
   }, [rootId, initRoot]);
 
-  return (
-    <div className="app-container">
-      <Toolbar />
-      <div className="canvas-container">
-        <Canvas />
-      </div>
-    </div>
-  );
+  return <Canvas />;
 }

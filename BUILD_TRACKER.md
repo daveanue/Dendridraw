@@ -11,9 +11,9 @@ Create a mindmap-native workflow on top of Excalidraw:
 
 ## Current Focus (Now)
 1. Interaction reliability (highest priority)
-- [ ] Selection sync between Excalidraw and store is always correct.
-- [ ] Text edit sync is consistent for bound labels.
-- [ ] Keyboard shortcuts (`Tab`, `Enter`, `Delete`, `Space`, `F2`) behave predictably.
+- [x] Selection sync between Excalidraw and store is always correct (for managed/unmanaged flows currently covered by tests).
+- [x] Text edit sync is consistent for bound labels.
+- [x] Keyboard shortcuts (`Tab`, `Enter`, `Delete`, `Space`, `F2`) behave predictably.
 
 2. Direct manipulation
 - [ ] Drag to reorder siblings.
@@ -63,6 +63,7 @@ Create a mindmap-native workflow on top of Excalidraw:
   - Added keyboard shortcut policy tests for edit-mode gating, modifier/editable-target guards, and key mapping behavior.
   - Added canvas sync tests for managed selection mapping and label->node resolution (including bound text containers).
   - Refactored shortcut/canvas sync decision logic into pure helpers to keep behavior deterministic and testable.
+- Scoped keyboard shortcuts to the canvas interaction context (removed global shortcut interception risk with Excalidraw UI/settings).
 - Build validated with increased Node memory (`--max-old-space-size=4096`).
 
 ## How We Update This File
