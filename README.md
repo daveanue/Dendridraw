@@ -1,73 +1,41 @@
-# React + TypeScript + Vite
+# Dendridraw
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+> **"Excalidraw is perfect for mind maps, but it lacks structure."**
+> A semantic, keyboard-driven mind mapping layer built on top of Excalidraw.
 
-Currently, two official plugins are available:
+## 🚀 Quick Start
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+```bash
+# Install dependencies
+npm install
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+# Run the dev server
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Open [http://localhost:5173](http://localhost:5173) to start mapping.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## ✨ Core Features (MVP)
+-   **Semantic Structure:** True parent/child relationships (managed via Zustand).
+-   **Hybrid Canvas:** Structured mind maps coexist with freeform Excalidraw drawings.
+-   **Keyboard First:**
+    -   `Tab`: Create child node
+    -   `Enter`: Create sibling node
+    -   `Del`: Delete node (and subtree)
+    -   `Arrows`: Navigate (Coming soon)
+-   **Auto-Layout:** Nodes are automatically positioned based on the tree structure.
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+## 🛠 Tech Stack
+-   **Core:** React, TypeScript, Vite
+-   **State:** Zustand (Tree model source of truth)
+-   **Canvas:** `@excalidraw/excalidraw` (Renderer)
+-   **Layout:** Custom offset-based engine
+
+## 📂 Project Structure
+-   `src/store` - Zustand store for the semantic tree (`mindmapStore.ts`)
+-   `src/engine` - Layout and rendering logic (`layout.ts`, `renderer.ts`)
+-   `src/components` - UI components (`Canvas.tsx`, `Toolbar.tsx`)
+-   `src/types` - Core type definitions
+
+## 📖 Learn More
+See [PROJECT_OVERVIEW.md](./PROJECT_OVERVIEW.md) for the full vision, architecture diagrams, and roadmap.
