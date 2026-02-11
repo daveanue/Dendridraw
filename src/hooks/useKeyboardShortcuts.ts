@@ -10,8 +10,9 @@
  *
  * Shortcuts are only active when not editing text inside Excalidraw.
  */
-import { useEffect, useCallback, useRef } from 'react';
+import { useEffect, useCallback, useRef, type RefObject } from 'react';
 import { useMindmapStore } from '../store/mindmapStore';
+import { getMindmapShortcutAction } from './shortcutPolicy';
 
 /** Ref to track whether inline editing is active. */
 let isEditing = false;
@@ -22,6 +23,7 @@ export function setEditingState(editing: boolean): void {
 
 export function useKeyboardShortcuts(
     onStartEdit: (nodeId: string) => void,
+    scopeRef: RefObject<HTMLElement | null>,
 ): void {
     const addChild = useMindmapStore((s) => s.addChild);
     const addSibling = useMindmapStore((s) => s.addSibling);
@@ -36,63 +38,66 @@ export function useKeyboardShortcuts(
 
     // Use a ref to hold onStartEdit to avoid re-binding on every render
     const onStartEditRef = useRef(onStartEdit);
-    onStartEditRef.current = onStartEdit;
+    useEffect(() => {
+        onStartEditRef.current = onStartEdit;
+    }, [onStartEdit]);
 
     useEffect(() => {
+        const scopeElement = scopeRef.current;
+        if (!scopeElement) return;
+
+        function isEditableTarget(target: EventTarget | null): boolean {
+            if (!(target instanceof HTMLElement)) return false;
+            return Boolean(
+                target.closest(
+                    'input, textarea, select, button, a, [contenteditable=""], [contenteditable="true"], [role="textbox"]',
+                ),
+            );
+        }
+
         function handleKeyDown(e: KeyboardEvent): void {
-            // Don't intercept when user is typing in an input/textarea or editing
-            if (isEditing) return;
-            const tag = (e.target as HTMLElement)?.tagName;
-            if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-
             const selectedId = getSelectedNodeId();
-            if (!selectedId) return;
+            const action = getMindmapShortcutAction({
+                key: e.key,
+                hasSelection: Boolean(selectedId),
+                isEditing,
+                hasModifier: e.ctrlKey || e.metaKey || e.altKey,
+                isEditableTarget: isEditableTarget(e.target),
+            });
+            if (!action) return;
 
-            switch (e.key) {
-                case 'Tab': {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const newId = addChild(selectedId);
-                    // Trigger edit mode on the new node
+            e.preventDefault();
+            e.stopPropagation();
+
+            switch (action) {
+                case 'addChild': {
+                    const newId = addChild(selectedId!);
                     requestAnimationFrame(() => onStartEditRef.current(newId));
-                    break;
+                    return;
                 }
-                case 'Enter': {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const newId = addSibling(selectedId);
+                case 'addSibling': {
+                    const newId = addSibling(selectedId!);
                     requestAnimationFrame(() => onStartEditRef.current(newId));
-                    break;
+                    return;
                 }
-                case 'Delete':
-                case 'Backspace': {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    deleteNode(selectedId);
-                    break;
-                }
-                case ' ': {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    toggleCollapse(selectedId);
-                    break;
-                }
-                case 'Escape': {
-                    e.preventDefault();
+                case 'deleteNode':
+                    deleteNode(selectedId!);
+                    return;
+                case 'toggleCollapse':
+                    toggleCollapse(selectedId!);
+                    return;
+                case 'deselect':
                     selectNode(null);
-                    break;
-                }
-                case 'F2': {
-                    e.preventDefault();
-                    onStartEditRef.current(selectedId);
-                    break;
-                }
-                default:
-                    break;
+                    return;
+                case 'startEdit':
+                    onStartEditRef.current(selectedId!);
+                    return;
             }
         }
 
-        window.addEventListener('keydown', handleKeyDown, { capture: true });
-        return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
-    }, [addChild, addSibling, deleteNode, toggleCollapse, selectNode, getSelectedNodeId]);
+        scopeElement.addEventListener('keydown', handleKeyDown, { capture: true });
+        return () => {
+            scopeElement.removeEventListener('keydown', handleKeyDown, { capture: true });
+        };
+    }, [addChild, addSibling, deleteNode, toggleCollapse, selectNode, getSelectedNodeId, scopeRef]);
 }
