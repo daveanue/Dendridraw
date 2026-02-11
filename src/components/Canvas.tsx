@@ -264,6 +264,17 @@ export default function Canvas() {
         return resolved.customData.mindmapNodeId;
     }, [api]);
 
+    const resolveSelectedManagedNodeIdFromApi = useCallback((): string | null => {
+        if (!api) return null;
+        const selectedIds = Object.keys(api.getAppState().selectedElementIds || {});
+        if (selectedIds.length === 0) return null;
+        const byId = new Map<string, ExcalidrawElement>();
+        for (const sceneElement of api.getSceneElements()) {
+            byId.set(sceneElement.id, sceneElement);
+        }
+        return resolveSelectedManagedNodeId(selectedIds, byId);
+    }, [api]);
+
     useEffect(() => {
         if (!api || !mindmapModeEnabled) return;
 
@@ -281,7 +292,7 @@ export default function Canvas() {
                 pointerDownState.hit.element as ExcalidrawElement | null,
             );
             const state = useMindmapStore.getState();
-            const currentSelectedNodeId = state.selectedNodeId;
+            const currentSelectedNodeId = resolveSelectedManagedNodeIdFromApi() || state.selectedNodeId;
 
             const parentNodeId = hitNodeId || currentSelectedNodeId || state.rootId;
             if (!parentNodeId) return;
@@ -290,7 +301,14 @@ export default function Canvas() {
         });
 
         return unsubscribe;
-    }, [api, mindmapModeEnabled, createChildAndStartEdit, isInteractiveTarget, resolveNodeIdFromHitElement]);
+    }, [
+        api,
+        mindmapModeEnabled,
+        createChildAndStartEdit,
+        isInteractiveTarget,
+        resolveNodeIdFromHitElement,
+        resolveSelectedManagedNodeIdFromApi,
+    ]);
 
     const toggleMindmapMode = useCallback(() => {
         setMindmapModeEnabled((enabled) => {
@@ -304,10 +322,10 @@ export default function Canvas() {
 
     const handleQuickAddNode = useCallback(() => {
         const state = useMindmapStore.getState();
-        const parentNodeId = state.selectedNodeId || state.rootId;
+        const parentNodeId = resolveSelectedManagedNodeIdFromApi() || state.selectedNodeId || state.rootId;
         if (!parentNodeId) return;
         createChildAndStartEdit(parentNodeId);
-    }, [createChildAndStartEdit]);
+    }, [createChildAndStartEdit, resolveSelectedManagedNodeIdFromApi]);
 
     // Register keyboard shortcuts
     useKeyboardShortcuts(handleStartEdit, shortcutScopeRef);
