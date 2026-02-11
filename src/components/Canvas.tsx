@@ -26,16 +26,27 @@ import {
 
 type SelectionMap = Record<string, true>;
 
+function normalizeLabelForStore(text: string): string {
+    return text.trim().length === 0 ? '' : text;
+}
+
 export default function Canvas() {
-    const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null);
+    const [api, setApiState] = useState<ExcalidrawImperativeAPI | null>(null);
     const isInitialRender = useRef(true);
     const latestSceneElementsRef = useRef<readonly ExcalidrawElement[]>([]);
+    const suppressOnChangeRef = useRef(false);
     const shortcutScopeRef = useRef<HTMLDivElement | null>(null);
+    const [mindmapModeEnabled, setMindmapModeEnabled] = useState(false);
+
+    const setApi = useCallback((nextApi: ExcalidrawImperativeAPI) => {
+        setApiState((currentApi) => (currentApi === nextApi ? currentApi : nextApi));
+    }, []);
 
     // Subscribe to store slices
     const rootId = useMindmapStore((s) => s.rootId);
     const nodes = useMindmapStore((s) => s.nodes);
     const selectedNodeId = useMindmapStore((s) => s.selectedNodeId);
+    const addChild = useMindmapStore((s) => s.addChild);
     const selectNode = useMindmapStore((s) => s.selectNode);
     const updateLabel = useMindmapStore((s) => s.updateLabel);
 
@@ -46,7 +57,8 @@ export default function Canvas() {
         [rootId, nodes, layout],
     );
     const elements = useMemo(
-        () => convertToExcalidrawElements(descriptors),
+        // Preserve semantic IDs so store<->scene selection/edit mapping stays stable.
+        () => convertToExcalidrawElements(descriptors, { regenerateIds: false }),
         [descriptors],
     );
     const managedShapeIds = useMemo(() => {
@@ -104,15 +116,26 @@ export default function Canvas() {
         [],
     );
 
-    // Push elements to Excalidraw when they change
+    // Push projected elements to Excalidraw, preserving semantic selection.
     useEffect(() => {
         if (!api) return;
         const mergedElements = mergeWithUnmanagedElements(elements);
+        const currentSelection = api.getAppState().selectedElementIds || {};
+        const targetSelection: SelectionMap =
+            selectedNodeId && projectedShapeIds.has(selectedNodeId)
+                ? { [`shape-${selectedNodeId}`]: true }
+                : {};
+        const shouldSyncSelection = !areSelectionMapsEqual(currentSelection, targetSelection);
 
         // Derived scene updates should not pollute undo/redo history.
+        suppressOnChangeRef.current = true;
         api.updateScene({
             elements: mergedElements,
+            appState: shouldSyncSelection ? { selectedElementIds: targetSelection } : undefined,
             captureUpdate: CaptureUpdateAction.NEVER,
+        });
+        requestAnimationFrame(() => {
+            suppressOnChangeRef.current = false;
         });
 
         // Scroll to content on initial render
@@ -122,31 +145,28 @@ export default function Canvas() {
                 api.scrollToContent(elements, { fitToContent: true, animate: true });
             });
         }
-    }, [api, elements, mergeWithUnmanagedElements]);
-
-    // Sync store node selection back to Excalidraw selection.
-    useEffect(() => {
-        if (!api || !selectedNodeId || !projectedShapeIds.has(selectedNodeId)) return;
-        const shapeId = `shape-${selectedNodeId}`;
-        const targetSelection: SelectionMap = { [shapeId]: true };
-        const currentSelection = api.getAppState().selectedElementIds || {};
-        if (areSelectionMapsEqual(currentSelection, targetSelection)) return;
-        api.updateScene({
-            appState: { selectedElementIds: targetSelection },
-            captureUpdate: CaptureUpdateAction.NEVER,
-        });
-    }, [api, selectedNodeId, projectedShapeIds, areSelectionMapsEqual]);
+    }, [
+        api,
+        elements,
+        mergeWithUnmanagedElements,
+        selectedNodeId,
+        projectedShapeIds,
+        areSelectionMapsEqual,
+    ]);
 
     // Handle onChange from Excalidraw — detect node selection and label edits
     const handleChange = useCallback(
         (sceneElements: readonly OrderedExcalidrawElement[], appState: AppState) => {
             latestSceneElementsRef.current = sceneElements;
             setEditingState(Boolean(appState?.editingTextElement));
+            if (suppressOnChangeRef.current) return;
 
             const byId = new Map<string, ExcalidrawElement>();
             for (const element of sceneElements) {
                 byId.set(element.id, element);
             }
+
+            if (appState?.editingTextElement) return;
 
             // --- Selection detection ---
             const selectedIds = Object.keys(appState?.selectedElementIds || {});
@@ -170,8 +190,9 @@ export default function Canvas() {
                 const nodeId = resolveLabelNodeId(element, byId);
                 if (!nodeId) continue;
                 const currentNode = useMindmapStore.getState().nodes[nodeId];
-                if (currentNode && element.text !== currentNode.label) {
-                    updateLabel(nodeId, element.text);
+                const normalizedLabel = normalizeLabelForStore(element.text);
+                if (currentNode && normalizedLabel !== currentNode.label) {
+                    updateLabel(nodeId, normalizedLabel);
                 }
             }
         },
@@ -189,6 +210,7 @@ export default function Canvas() {
         );
         if (!labelElement) return;
 
+        suppressOnChangeRef.current = true;
         api.updateScene({
             appState: {
                 selectedElementIds: { [shapeId]: true },
@@ -196,20 +218,96 @@ export default function Canvas() {
             },
             captureUpdate: CaptureUpdateAction.NEVER,
         });
+        requestAnimationFrame(() => {
+            suppressOnChangeRef.current = false;
+        });
     }, [api]);
 
-    const handleScopePointerDownCapture = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-        const target = event.target;
-        if (!(target instanceof HTMLElement)) return;
-        if (
+    const scheduleStartEdit = useCallback((nodeId: string) => {
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                handleStartEdit(nodeId);
+            });
+        });
+    }, [handleStartEdit]);
+
+    const createChildAndStartEdit = useCallback((parentNodeId: string) => {
+        // Defer store updates to avoid state updates during Excalidraw render transitions.
+        requestAnimationFrame(() => {
+            const newNodeId = addChild(parentNodeId);
+            scheduleStartEdit(newNodeId);
+        });
+    }, [addChild, scheduleStartEdit]);
+
+    const isInteractiveTarget = useCallback((target: EventTarget | null): boolean => {
+        if (!(target instanceof HTMLElement)) return false;
+        return Boolean(
             target.closest(
                 'input, textarea, select, button, a, [contenteditable=""], [contenteditable="true"], [role="textbox"]',
-            )
-        ) {
-            return;
-        }
-        event.currentTarget.focus({ preventScroll: true });
+            ),
+        );
     }, []);
+
+    const resolveNodeIdFromHitElement = useCallback((element: ExcalidrawElement | null): string | null => {
+        if (!element) return null;
+
+        let resolved: ExcalidrawElement | undefined = element;
+        if (resolved.type === 'text' && resolved.containerId && api) {
+            const containerId = resolved.containerId;
+            const container = api.getSceneElements().find(
+                (sceneElement) => sceneElement.id === containerId,
+            );
+            if (container) resolved = container;
+        }
+
+        if (!isManagedElement(resolved)) return null;
+        return resolved.customData.mindmapNodeId;
+    }, [api]);
+
+    useEffect(() => {
+        if (!api || !mindmapModeEnabled) return;
+
+        const unsubscribe = api.onPointerUp((activeTool, pointerDownState, event) => {
+            if (activeTool.type !== 'selection') return;
+            if (pointerDownState.drag.hasOccurred) return;
+            if (event.button !== 0) return;
+            if (isInteractiveTarget(event.target)) return;
+            if (api.getAppState().editingTextElement) return;
+            // Keep default Excalidraw behavior on single-click.
+            // Mindmap node creation is explicit (+ Node) or double-click.
+            if (event.detail < 2) return;
+
+            const hitNodeId = resolveNodeIdFromHitElement(
+                pointerDownState.hit.element as ExcalidrawElement | null,
+            );
+            const state = useMindmapStore.getState();
+            const currentSelectedNodeId = state.selectedNodeId;
+
+            const parentNodeId = hitNodeId || currentSelectedNodeId || state.rootId;
+            if (!parentNodeId) return;
+
+            createChildAndStartEdit(parentNodeId);
+        });
+
+        return unsubscribe;
+    }, [api, mindmapModeEnabled, createChildAndStartEdit, isInteractiveTarget, resolveNodeIdFromHitElement]);
+
+    const toggleMindmapMode = useCallback(() => {
+        setMindmapModeEnabled((enabled) => {
+            const next = !enabled;
+            if (next && api) {
+                api.setActiveTool({ type: 'selection' });
+            }
+            return next;
+        });
+    }, [api]);
+
+    const handleQuickAddNode = useCallback(() => {
+        const state = useMindmapStore.getState();
+        const parentNodeId = state.selectedNodeId || state.rootId;
+        if (!parentNodeId) return;
+        createChildAndStartEdit(parentNodeId);
+    }, [createChildAndStartEdit]);
 
     // Register keyboard shortcuts
     useKeyboardShortcuts(handleStartEdit, shortcutScopeRef);
@@ -218,7 +316,6 @@ export default function Canvas() {
         <div
             ref={shortcutScopeRef}
             tabIndex={0}
-            onPointerDownCapture={handleScopePointerDownCapture}
             style={{ width: '100%', height: '100%' }}
         >
             <Excalidraw
@@ -231,6 +328,46 @@ export default function Canvas() {
                     },
                 }}
                 onChange={handleChange}
+                renderTopRightUI={() => (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, pointerEvents: 'auto' }}>
+                        <button
+                            type="button"
+                            onClick={toggleMindmapMode}
+                            style={{
+                                height: 32,
+                                borderRadius: 8,
+                                border: mindmapModeEnabled ? '1px solid #40c057' : '1px solid #495057',
+                                background: mindmapModeEnabled ? '#2b8a3e' : '#343a40',
+                                color: '#f8f9fa',
+                                fontSize: 12,
+                                fontWeight: 600,
+                                padding: '0 12px',
+                                cursor: 'pointer',
+                            }}
+                        >
+                            {mindmapModeEnabled ? 'Mindmap: On' : 'Mindmap: Off'}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={handleQuickAddNode}
+                            disabled={!mindmapModeEnabled}
+                            style={{
+                                height: 32,
+                                borderRadius: 8,
+                                border: '1px solid #495057',
+                                background: mindmapModeEnabled ? '#364fc7' : '#495057',
+                                color: '#f8f9fa',
+                                fontSize: 12,
+                                fontWeight: 600,
+                                padding: '0 12px',
+                                cursor: mindmapModeEnabled ? 'pointer' : 'not-allowed',
+                                opacity: mindmapModeEnabled ? 1 : 0.7,
+                            }}
+                        >
+                            + Node
+                        </button>
+                    </div>
+                )}
                 UIOptions={{
                     canvasActions: {
                         clearCanvas: false,
