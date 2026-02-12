@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+    hasManagedElementId,
     isManagedElement,
+    resolveManagedShapeNodeId,
     resolveLabelNodeId,
     resolveSelectedManagedNodeId,
     type SyncElement,
@@ -18,6 +20,20 @@ test('isManagedElement detects valid managed customData', () => {
         customData: { mindmapNodeId: 'node-a', role: 'shape' },
     };
     assert.equal(isManagedElement(element), true);
+});
+
+test('hasManagedElementId detects managed id prefixes', () => {
+    assert.equal(hasManagedElementId('shape-node1'), true);
+    assert.equal(hasManagedElementId('arrow-root-child'), true);
+    assert.equal(hasManagedElementId('freeform-123'), false);
+});
+
+test('resolveManagedShapeNodeId maps shape id fallback without customData', () => {
+    const element: SyncElement = {
+        id: 'shape-node-a',
+        type: 'rectangle',
+    };
+    assert.equal(resolveManagedShapeNodeId(element), 'node-a');
 });
 
 test('resolveSelectedManagedNodeId maps bound text selection to its managed container', () => {

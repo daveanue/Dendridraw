@@ -7,6 +7,22 @@ export type SyncElement = {
     customData?: unknown;
 };
 
+const MANAGED_ELEMENT_ID_PREFIXES = ['shape-', 'arrow-', 'label-'] as const;
+
+export function hasManagedElementId(id: string | null | undefined): boolean {
+    if (typeof id !== 'string') return false;
+    return MANAGED_ELEMENT_ID_PREFIXES.some((prefix) => id.startsWith(prefix));
+}
+
+export function resolveManagedShapeNodeId(element: SyncElement): string | null {
+    if (isManagedElement(element) && element.customData.role === 'shape') {
+        return element.customData.mindmapNodeId;
+    }
+    if (!element.id.startsWith('shape-')) return null;
+    const nodeId = element.id.slice('shape-'.length);
+    return nodeId.length > 0 ? nodeId : null;
+}
+
 export function isManagedElement<T extends { customData?: unknown }>(
     element: T | undefined,
 ): element is T & { customData: DendridrawCustomData } {

@@ -1,6 +1,6 @@
 # Dendridraw Build Tracker
 
-Last updated: 2026-02-11
+Last updated: 2026-02-12
 Owner: Product + Engineering
 
 ## North Star
@@ -14,8 +14,15 @@ Create a mindmap-native workflow on top of Excalidraw:
 - [x] Selection sync between Excalidraw and store is always correct (for managed/unmanaged flows currently covered by tests).
 - [x] Text edit sync is consistent for bound labels.
 - [x] Keyboard shortcuts (`Tab`, `Enter`, `Delete`, `Space`, `F2`) behave predictably.
+- [x] Deleting a managed node removes both the shape and its bound label text (no orphan text elements).
 
-2. Direct manipulation
+2. Mindmap tree element model
+- [x] `Create mindmap tree` is integrated in the Excalidraw toolbar (shape tools area).
+- [x] Tree creation is explicit (no auto-root creation on refresh).
+- [x] Multiple independent trees can coexist on the same canvas (forest model).
+- [ ] Add tree-level controls (select/delete/relabel entire tree as one element).
+
+3. Direct manipulation
 - [ ] Drag to reorder siblings.
 - [ ] Drag to reparent to another node.
 - [ ] Clear drop-target feedback while dragging.
@@ -49,6 +56,22 @@ Create a mindmap-native workflow on top of Excalidraw:
 
 ## Update Log
 ### 2026-02-11
+- Migrated from single-root state to a multi-root forest model:
+  - Replaced `rootId` with `rootIds` in semantic state.
+  - `initRoot()` now creates a new independent tree instead of replacing prior trees.
+  - Updated delete/restore semantics for root membership.
+- Updated layout/renderer to project multiple roots in one scene:
+  - `computeLayout()` now lays out all roots.
+  - `buildElementDescriptors()` now renders all root trees.
+  - Added layout tests for multi-root behavior and manual position overrides.
+- Aligned UX with Excalidraw-first behavior:
+  - Removed auto-root creation on refresh.
+  - Restored stock Excalidraw look while preserving full-height canvas behavior without `index.css`.
+  - Integrated `Create mindmap tree` into the Excalidraw toolbar flow.
+- Fixed managed delete cleanup:
+  - Removed orphan bound text when deleting managed nodes by hardening managed-element merge filtering.
+- Hardened typing during the root model transition:
+  - Added compatibility-safe `rootId`/`rootIds` normalization in layout/renderer helpers to prevent transient TS mismatches.
 - Fixed scene sync behavior to rely more on Excalidraw primitives:
   - `CaptureUpdateAction.NEVER` for projected scene updates.
   - Better selection mapping for bound text/container elements.

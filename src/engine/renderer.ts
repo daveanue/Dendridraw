@@ -54,6 +54,20 @@ function makeCustomData(
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type ElementDescriptor = any;
 
+function normalizeRootIds(
+    rootIdsOrRootId: readonly string[] | string | null | undefined,
+): string[] {
+    if (Array.isArray(rootIdsOrRootId)) {
+        return rootIdsOrRootId.filter(
+            (id): id is string => typeof id === 'string' && id.length > 0,
+        );
+    }
+    if (typeof rootIdsOrRootId === 'string' && rootIdsOrRootId.length > 0) {
+        return [rootIdsOrRootId];
+    }
+    return [];
+}
+
 /* ------------------------------------------------------------------ */
 /*  Element factories                                                 */
 /* ------------------------------------------------------------------ */
@@ -143,14 +157,16 @@ function createArrowDescriptor(
  * `convertToExcalidrawElements()` to produce valid scene elements.
  */
 export function buildElementDescriptors(
-    rootId: string | null,
+    rootIdsOrRootId: readonly string[] | string | null | undefined,
     nodes: Record<string, MindmapNode>,
     layout: LayoutMap,
 ): ElementDescriptor[] {
-    if (!rootId || !nodes[rootId]) return [];
+    const rootIds = normalizeRootIds(rootIdsOrRootId);
+    if (rootIds.length === 0) return [];
 
     const descriptors: ElementDescriptor[] = [];
     const visited = new Set<string>();
+    const rootSet = new Set(rootIds);
 
     function walk(nodeId: string): void {
         if (visited.has(nodeId)) return;
@@ -160,7 +176,7 @@ export function buildElementDescriptors(
         const pos = layout[nodeId];
         if (!node || !pos) return;
 
-        const isRoot = nodeId === rootId;
+        const isRoot = node.parentId === null || rootSet.has(nodeId);
 
         // Shape with embedded label
         descriptors.push(createRectDescriptor(node, pos.x, pos.y, isRoot));
@@ -185,6 +201,9 @@ export function buildElementDescriptors(
         }
     }
 
-    walk(rootId);
+    for (const rootId of rootIds) {
+        if (!nodes[rootId]) continue;
+        walk(rootId);
+    }
     return descriptors;
 }

@@ -17,10 +17,9 @@ export default function Toolbar() {
     const setNodeType = useMindmapStore((s) => s.setNodeType);
     const toggleCollapse = useMindmapStore((s) => s.toggleCollapse);
     const deleteNode = useMindmapStore((s) => s.deleteNode);
-    const rootId = useMindmapStore((s) => s.rootId);
 
     const selectedNode = selectedNodeId ? nodes[selectedNodeId] : null;
-    const isRoot = selectedNodeId === rootId;
+    const isRoot = selectedNode?.parentId === null;
 
     return (
         <div className="toolbar">

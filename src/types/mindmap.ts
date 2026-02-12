@@ -18,6 +18,10 @@ export interface MindmapNode {
   childrenIds: string[];
   type: NodeType;
   collapsed: boolean;
+  position?: {
+    x: number;
+    y: number;
+  };
   metadata: {
     notes?: string;
     links?: string[];
@@ -28,8 +32,8 @@ export interface MindmapNode {
 
 /** Full application state for one mindmap. */
 export interface MindmapState {
-  /** ID of the root node (null if map is empty). */
-  rootId: string | null;
+  /** IDs of all root nodes (one per independent tree). */
+  rootIds: string[];
   /** All live nodes, keyed by ID. */
   nodes: Record<string, MindmapNode>;
   /** Soft-deleted nodes for restore capability. */

@@ -27,6 +27,20 @@ export interface NodePosition {
 
 export type LayoutMap = Record<string, NodePosition>;
 
+function normalizeRootIds(
+    rootIdsOrRootId: readonly string[] | string | null | undefined,
+): string[] {
+    if (Array.isArray(rootIdsOrRootId)) {
+        return rootIdsOrRootId.filter(
+            (id): id is string => typeof id === 'string' && id.length > 0,
+        );
+    }
+    if (typeof rootIdsOrRootId === 'string' && rootIdsOrRootId.length > 0) {
+        return [rootIdsOrRootId];
+    }
+    return [];
+}
+
 /* ------------------------------------------------------------------ */
 /*  Layout computation                                                */
 /* ------------------------------------------------------------------ */
@@ -43,14 +57,29 @@ export type LayoutMap = Record<string, NodePosition>;
  * Returns a map of nodeId → { x, y }.
  */
 export function computeLayout(
-    rootId: string | null,
+    rootIdsOrRootId: readonly string[] | string | null | undefined,
     nodes: Record<string, MindmapNode>,
 ): LayoutMap {
-    if (!rootId || !nodes[rootId]) return {};
+    const rootIds = normalizeRootIds(rootIdsOrRootId);
+    if (rootIds.length === 0) return {};
 
     const positions: LayoutMap = {};
     // yOffset tracks the next available vertical position (global cursor)
     let yOffset = 0;
+    const orderedRootIds: string[] = [];
+    const seenRoots = new Set<string>();
+    for (const rootId of rootIds) {
+        if (!seenRoots.has(rootId) && nodes[rootId] && nodes[rootId].parentId === null) {
+            orderedRootIds.push(rootId);
+            seenRoots.add(rootId);
+        }
+    }
+    for (const [nodeId, node] of Object.entries(nodes)) {
+        if (node.parentId !== null || seenRoots.has(nodeId)) continue;
+        orderedRootIds.push(nodeId);
+        seenRoots.add(nodeId);
+    }
+    if (orderedRootIds.length === 0) return {};
 
     function layoutNode(nodeId: string, depth: number): void {
         const node = nodes[nodeId];
@@ -82,6 +111,15 @@ export function computeLayout(
         }
     }
 
-    layoutNode(rootId, 0);
+    for (const rootId of orderedRootIds) {
+        layoutNode(rootId, 0);
+    }
+
+    // Manual drag positions override auto layout for visible nodes.
+    for (const [nodeId, node] of Object.entries(nodes)) {
+        if (!positions[nodeId] || !node.position) continue;
+        positions[nodeId] = { x: node.position.x, y: node.position.y };
+    }
+
     return positions;
 }
