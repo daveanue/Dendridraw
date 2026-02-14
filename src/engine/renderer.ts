@@ -127,13 +127,14 @@ function createArrowDescriptor(
         strokeColor: '#868e96',
         strokeWidth: 2,
         roughness: 1,
-        startBinding: {
-            elementId: `shape-${parentNode.id}`,
+        // Skeleton bindings for convertToExcalidrawElements()
+        start: {
+            id: `shape-${parentNode.id}`,
             focus: 0,
             gap: 4,
         },
-        endBinding: {
-            elementId: `shape-${childNode.id}`,
+        end: {
+            id: `shape-${childNode.id}`,
             focus: 0,
             gap: 4,
         },

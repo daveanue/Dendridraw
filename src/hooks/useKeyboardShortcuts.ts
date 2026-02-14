@@ -30,8 +30,6 @@ export function useKeyboardShortcuts(
     const deleteNode = useMindmapStore((s) => s.deleteNode);
     const toggleCollapse = useMindmapStore((s) => s.toggleCollapse);
     const selectNode = useMindmapStore((s) => s.selectNode);
-    const undo = useMindmapStore((s) => s.undo);
-    const redo = useMindmapStore((s) => s.redo);
 
     const getSelectedNodeId = useCallback(
         () => useMindmapStore.getState().selectedNodeId,
@@ -58,24 +56,6 @@ export function useKeyboardShortcuts(
         }
 
         function handleKeyDown(e: KeyboardEvent): void {
-            const hasMindmap = useMindmapStore.getState().rootIds.length > 0;
-            const isUndoRedoTarget = !isEditing && !isEditableTarget(e.target);
-            const hasUndoModifier = (e.ctrlKey || e.metaKey) && !e.altKey;
-            if (hasMindmap && isUndoRedoTarget && hasUndoModifier) {
-                const key = e.key.toLowerCase();
-                const shouldRedo = (key === 'z' && e.shiftKey) || key === 'y';
-                if (key === 'z' || shouldRedo) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (shouldRedo) {
-                        redo();
-                    } else {
-                        undo();
-                    }
-                    return;
-                }
-            }
-
             const selectedId = getSelectedNodeId();
             const action = getMindmapShortcutAction({
                 key: e.key,
@@ -119,5 +99,5 @@ export function useKeyboardShortcuts(
         return () => {
             scopeElement.removeEventListener('keydown', handleKeyDown, { capture: true });
         };
-    }, [addChild, addSibling, deleteNode, toggleCollapse, selectNode, undo, redo, getSelectedNodeId, scopeRef]);
+    }, [addChild, addSibling, deleteNode, toggleCollapse, selectNode, getSelectedNodeId, scopeRef]);
 }

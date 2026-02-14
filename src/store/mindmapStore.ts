@@ -1,8 +1,9 @@
 /**
- * Zustand store — single source of truth for the mindmap tree.
+ * Zustand store — semantic source of truth for mindmap structure.
  *
- * All mutations go through this store. Excalidraw elements are
- * derived from this state, never the other way around.
+ * Structure (nodes/parent-child/type/collapse) is authored here.
+ * Canvas-native interactions (label edits, positions, native history)
+ * are mirrored back into this store by Canvas sync.
  */
 import { create } from 'zustand';
 import { nanoid } from 'nanoid';
@@ -36,6 +37,12 @@ function createNode(
 export interface MindmapActions {
     /** Initialize the map with a root node. */
     initRoot: (label?: string) => void;
+    moveSubTree: (
+        nodeId: string,
+        dx: number,
+        dy: number,
+        fallbackPositions: Record<string, { x: number; y: number }>,
+    ) => void;
     /** Add a child to the given parent; returns the new node ID. */
     addChild: (parentId: string, label?: string) => string;
     /** Add a sibling after the given node; returns the new node ID. */
@@ -54,22 +61,9 @@ export interface MindmapActions {
     setNodeType: (nodeId: string, type: NodeType) => void;
     /** Persist a node's canvas position after manual drag. */
     setNodePosition: (nodeId: string, position: { x: number; y: number }) => void;
-    /** Undo the latest semantic change. */
-    undo: () => void;
-    /** Redo the latest semantic change. */
-    redo: () => void;
-    /** Clear semantic undo/redo history. */
-    clearHistory: () => void;
 }
 
 export type MindmapStore = MindmapState & MindmapActions;
-
-type HistorySnapshot = Pick<
-    MindmapState,
-    'rootIds' | 'nodes' | 'deletedNodes' | 'selectedNodeId' | 'focusBranchId'
->;
-
-type StatePatch = Partial<HistorySnapshot>;
 
 /* ------------------------------------------------------------------ */
 /*  Helpers for subtree operations                                    */
@@ -119,33 +113,17 @@ function collectSubtree(
     return result;
 }
 
+
+
 /* ------------------------------------------------------------------ */
 /*  Store definition                                                  */
 /* ------------------------------------------------------------------ */
 
 export const useMindmapStore = create<MindmapStore>((set, get) => {
-    const MAX_HISTORY_ENTRIES = 250;
-    const past: HistorySnapshot[] = [];
-    const future: HistorySnapshot[] = [];
-
-    const snapshotFromState = (state: HistorySnapshot): HistorySnapshot => ({
-        rootIds: state.rootIds,
-        nodes: state.nodes,
-        deletedNodes: state.deletedNodes,
-        selectedNodeId: state.selectedNodeId,
-        focusBranchId: state.focusBranchId,
-    });
-
-    const applyPatchWithHistory = (updater: (state: MindmapStore) => StatePatch | null): void => {
+    const applyPatch = (updater: (state: MindmapStore) => Partial<MindmapState> | null): void => {
         set((state) => {
             const patch = updater(state);
             if (!patch) return state;
-
-            past.push(snapshotFromState(state));
-            if (past.length > MAX_HISTORY_ENTRIES) {
-                past.shift();
-            }
-            future.length = 0;
             return patch;
         });
     };
@@ -162,16 +140,38 @@ export const useMindmapStore = create<MindmapStore>((set, get) => {
 
         initRoot(label = 'Central Topic') {
             const root = createNode(label, null);
-            applyPatchWithHistory((state) => ({
+            applyPatch((state) => ({
                 rootIds: [...state.rootIds, root.id],
                 nodes: { ...state.nodes, [root.id]: root },
                 selectedNodeId: root.id,
             }));
         },
 
+        moveSubTree(nodeId, dx, dy, fallbackPositions) {
+            applyPatch((state) => {
+                const subtreeIds = collectSubtree(nodeId, state.nodes);
+                const changed: Record<string, MindmapNode> = {};
+                for (const id of subtreeIds) {
+                    const node = state.nodes[id];
+                    if (!node) continue;
+                    const basePosition = fallbackPositions[id] || node.position;
+                    if (!basePosition) continue;
+                    changed[id] = {
+                        ...node,
+                        position: {
+                            x: basePosition.x + dx,
+                            y: basePosition.y + dy,
+                        },
+                        metadata: { ...node.metadata, updatedAt: Date.now() },
+                    };
+                }
+                return { nodes: { ...state.nodes, ...changed } };
+            });
+        },
+
         addChild(parentId, label = '') {
             const child = createNode(label, parentId);
-            applyPatchWithHistory((state) => {
+            applyPatch((state) => {
                 const parent = state.nodes[parentId];
                 if (!parent) return null;
                 return {
@@ -196,7 +196,7 @@ export const useMindmapStore = create<MindmapStore>((set, get) => {
             if (!sibling || !sibling.parentId) return siblingId; // can't add sibling to root
 
             const newNode = createNode(label, sibling.parentId);
-            applyPatchWithHistory((state) => {
+            applyPatch((state) => {
                 const parent = state.nodes[sibling.parentId!];
                 if (!parent) return null;
                 const idx = parent.childrenIds.indexOf(siblingId);
@@ -215,7 +215,7 @@ export const useMindmapStore = create<MindmapStore>((set, get) => {
         },
 
         updateLabel(nodeId, label) {
-            applyPatchWithHistory((state) => {
+            applyPatch((state) => {
                 const node = state.nodes[nodeId];
                 if (!node || node.label === label) return null;
                 return {
@@ -238,7 +238,7 @@ export const useMindmapStore = create<MindmapStore>((set, get) => {
             const node = nodes[nodeId];
             if (!node) return;
 
-            applyPatchWithHistory((state) => {
+            applyPatch((state) => {
                 // Remove from parent's children
                 const newNodes = { ...state.nodes };
                 const newDeleted = { ...state.deletedNodes };
@@ -280,7 +280,7 @@ export const useMindmapStore = create<MindmapStore>((set, get) => {
         },
 
         restoreNode(nodeId) {
-            applyPatchWithHistory((state) => {
+            applyPatch((state) => {
                 const node = state.deletedNodes[nodeId];
                 if (!node) return null;
 
@@ -318,7 +318,7 @@ export const useMindmapStore = create<MindmapStore>((set, get) => {
         },
 
         toggleCollapse(nodeId) {
-            applyPatchWithHistory((state) => {
+            applyPatch((state) => {
                 const node = state.nodes[nodeId];
                 if (!node || node.childrenIds.length === 0) return null;
                 return {
@@ -335,7 +335,7 @@ export const useMindmapStore = create<MindmapStore>((set, get) => {
         },
 
         setNodeType(nodeId, type) {
-            applyPatchWithHistory((state) => {
+            applyPatch((state) => {
                 const node = state.nodes[nodeId];
                 if (!node || node.type === type) return null;
                 return {
@@ -348,7 +348,7 @@ export const useMindmapStore = create<MindmapStore>((set, get) => {
         },
 
         setNodePosition(nodeId, position) {
-            applyPatchWithHistory((state) => {
+            applyPatch((state) => {
                 const node = state.nodes[nodeId];
                 if (!node) return null;
                 const previous = node.position;
@@ -366,28 +366,6 @@ export const useMindmapStore = create<MindmapStore>((set, get) => {
                     },
                 };
             });
-        },
-
-        undo() {
-            const previous = past.pop();
-            if (!previous) return;
-            future.push(snapshotFromState(get()));
-            set(previous);
-        },
-
-        redo() {
-            const next = future.pop();
-            if (!next) return;
-            past.push(snapshotFromState(get()));
-            if (past.length > MAX_HISTORY_ENTRIES) {
-                past.shift();
-            }
-            set(next);
-        },
-
-        clearHistory() {
-            past.length = 0;
-            future.length = 0;
         },
     };
 });

@@ -46,6 +46,56 @@ graph TD
     -   **Tagged elements** are managed by Dendridraw (locked layout, special behaviors).
     -   **Untagged elements** are managed by Excalidraw native behavior (freeform drawing).
 
+### State Ownership Contract (Current Implementation)
+This is the practical contract implemented in code today:
+
+1.  **`mindmapStore` owns semantic state**  
+    It stores tree structure and node metadata (`rootIds`, `nodes`, `selectedNodeId`, etc.).
+2.  **`Canvas` projects semantic state into Excalidraw**  
+    Managed elements are generated from the store (`shape-*`, `arrow-*`, `label-*`, with `customData` links).
+3.  **Only managed element changes sync back to the store**  
+    We mirror these Excalidraw actions into `mindmapStore`:
+    - node delete (managed shapes)
+    - selection changes (managed nodes)
+    - label edits (managed labels/text)
+    - manual node moves (managed shapes -> `position`)
+4.  **Unmanaged Excalidraw content is not tracked in `mindmapStore`**  
+    Freeform shapes/text remain Excalidraw-owned. We preserve them during managed scene updates by merging unmanaged elements back into the scene.
+5.  **History is native-first**  
+    Undo/redo should be owned by Excalidraw for canvas interactions. The semantic store mirrors managed scene changes (including history-driven add/remove) instead of running a separate undo stack.
+6.  **Persistence implication**  
+    Without a dedicated Excalidraw scene persistence layer, unmanaged elements are runtime-only from the app's perspective.
+
+### Current Model Snapshot (As Of February 13, 2026)
+What we currently have is a **hybrid semantic-projection model with native interaction patches**:
+
+1.  **Semantic-first structure**  
+    Parent/child relationships, node type, collapse state, and soft-delete/restore live in Zustand.
+2.  **Projected managed nodes**  
+    Mindmap nodes/connectors are regenerated from semantic state, but IDs/customData stay stable.
+3.  **Native connector behavior during interaction**  
+    Existing managed arrows preserve Excalidraw-owned geometry so anchor/routing behavior feels native while dragging.
+4.  **Native undo/redo ownership**  
+    Keyboard/UI undo is Excalidraw-native; semantic state reconciles on managed remove/re-add events.
+5.  **Position mirroring still exists**  
+    We still persist dragged managed-node positions in semantic state to prevent projection resets after structural edits.
+
+### Gap To Target (Miro-Like Mindmap)
+Not yet implemented:
+
+1.  **Subtree drag orchestration**  
+    Dragging a parent does not yet move the entire semantic subtree as one operation.
+2.  **Adaptive spacing/reflow on drop**  
+    No local collision-aware re-layout pass yet (branch-level spacing adjustment).
+3.  **Scene-first geometry ownership**  
+    We still depend on semantic projection for managed geometry, rather than Excalidraw-scene-first geometry.
+
+Code anchors:
+- `src/store/mindmapStore.ts`
+- `src/components/Canvas.tsx`
+- `src/components/canvasSync.ts`
+- `src/types/mindmap.ts`
+
 ### Tech Stack
 -   **Framework:** React + Vite + TypeScript (Fast, standard)
 -   **State:** Zustand (Simple, scalable store)

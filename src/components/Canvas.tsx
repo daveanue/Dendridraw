@@ -89,12 +89,22 @@ function areViewportTransformsEqual(a: ViewportTransform, b: ViewportTransform):
     );
 }
 
+function areStringSetsEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+    if (a.size !== b.size) return false;
+    for (const value of a) {
+        if (!b.has(value)) return false;
+    }
+    return true;
+}
+
 export default function Canvas() {
     const [api, setApiState] = useState<ExcalidrawImperativeAPI | null>(null);
     const [viewportTransform, setViewportTransform] = useState<ViewportTransform | null>(null);
     const [scopeRect, setScopeRect] = useState<ScopeRect | null>(null);
     const isInitialRender = useRef(true);
     const latestSceneElementsRef = useRef<readonly ExcalidrawElement[]>([]);
+    const projectedManagedElementIdsRef = useRef<Set<string>>(new Set());
+    const skipNextPositionSyncRef = useRef(false);
     const suppressOnChangeRef = useRef(false);
     const shortcutScopeRef = useRef<HTMLDivElement | null>(null);
     const knownManagedShapeIdsRef = useRef<Set<string>>(new Set());
@@ -126,8 +136,10 @@ export default function Canvas() {
     const initRoot = useMindmapStore((s) => s.initRoot);
     const addChild = useMindmapStore((s) => s.addChild);
     const deleteNode = useMindmapStore((s) => s.deleteNode);
+    const restoreNode = useMindmapStore((s) => s.restoreNode);
     const selectNode = useMindmapStore((s) => s.selectNode);
     const updateLabel = useMindmapStore((s) => s.updateLabel);
+    const moveSubTree = useMindmapStore((s) => s.moveSubTree);
     const setNodePosition = useMindmapStore((s) => s.setNodePosition);
 
     // Compute layout → element descriptors → Excalidraw elements
@@ -141,6 +153,7 @@ export default function Canvas() {
         () => convertToExcalidrawElements(descriptors, { regenerateIds: false }),
         [descriptors],
     );
+
     const managedShapeIds = useMemo(() => {
         const ids = new Set<string>();
         for (const element of elements) {
@@ -197,11 +210,64 @@ export default function Canvas() {
     );
 
     const mergeWithUnmanagedElements = useCallback(
-        (managedElements: readonly ExcalidrawElement[]): ExcalidrawElement[] => {
+        (
+            managedElements: readonly ExcalidrawElement[],
+            preserveConnectorGeometry: boolean,
+        ): ExcalidrawElement[] => {
+            const previousSceneById = new Map(
+                latestSceneElementsRef.current.map((element) => [element.id, element]),
+            );
+            const reconciledManagedElements = managedElements.map((element) => {
+                // Preserve existing arrow geometry so connector routing/anchors stay native to Excalidraw.
+                if (!preserveConnectorGeometry) {
+                    return element;
+                }
+                if (!isManagedElement(element) || element.customData.role !== 'connector') {
+                    return element;
+                }
+                const existing = previousSceneById.get(element.id);
+                if (!existing || existing.type !== 'arrow') return element;
+                if ((existing as ExcalidrawElement & { isDeleted?: boolean }).isDeleted) {
+                    return element;
+                }
+                const existingArrow = existing as ExcalidrawElement & {
+                    startBinding?: { elementId: string } | null;
+                    endBinding?: { elementId: string } | null;
+                };
+                const projectedArrow = element as ExcalidrawElement & {
+                    startBinding?: { elementId: string } | null;
+                    endBinding?: { elementId: string } | null;
+                };
+                const existingStartId = existingArrow.startBinding?.elementId || null;
+                const existingEndId = existingArrow.endBinding?.elementId || null;
+                const projectedStartId = projectedArrow.startBinding?.elementId || null;
+                const projectedEndId = projectedArrow.endBinding?.elementId || null;
+                const hasReciprocalBinding = (boundShapeId: string | null): boolean => {
+                    if (!boundShapeId) return true;
+                    const boundShape = previousSceneById.get(boundShapeId) as (ExcalidrawElement & {
+                        boundElements?: Array<{ id: string; type: string }> | null;
+                    }) | undefined;
+                    return Boolean(boundShape?.boundElements?.some(
+                        (boundElement) => boundElement.id === existing.id && boundElement.type === 'arrow',
+                    ));
+                };
+
+                // Keep native arrow geometry only if existing bindings are still valid.
+                // If bindings are missing/stale, prefer projected arrow so bindings can heal.
+                if (
+                    existingStartId === projectedStartId &&
+                    existingEndId === projectedEndId &&
+                    hasReciprocalBinding(existingStartId) &&
+                    hasReciprocalBinding(existingEndId)
+                ) {
+                    return existing;
+                }
+                return element;
+            });
             const unmanagedElements = latestSceneElementsRef.current.filter(
                 (element) => !isManagedSceneElement(element),
             );
-            return [...unmanagedElements, ...managedElements];
+            return [...unmanagedElements, ...reconciledManagedElements];
         },
         [isManagedSceneElement],
     );
@@ -222,7 +288,16 @@ export default function Canvas() {
     // Push projected elements to Excalidraw, preserving semantic selection.
     useEffect(() => {
         if (!api) return;
-        const mergedElements = mergeWithUnmanagedElements(elements);
+        const nextManagedElementIds = new Set(elements.map((element) => element.id));
+        const didManagedStructureChange = !areStringSetsEqual(
+            projectedManagedElementIdsRef.current,
+            nextManagedElementIds,
+        );
+        projectedManagedElementIdsRef.current = nextManagedElementIds;
+        const mergedElements = mergeWithUnmanagedElements(
+            elements,
+            !didManagedStructureChange,
+        );
         const currentSelection = api.getAppState().selectedElementIds || {};
         const targetSelection: SelectionMap =
             selectedNodeId && projectedShapeIds.has(selectedNodeId)
@@ -230,12 +305,14 @@ export default function Canvas() {
                 : {};
         const shouldSyncSelection = !areSelectionMapsEqual(currentSelection, targetSelection);
 
-        // Derived scene updates should not pollute undo/redo history.
+        // Capture structural mindmap changes in Excalidraw history, but keep projection-only syncs silent.
         suppressOnChangeRef.current = true;
         api.updateScene({
             elements: mergedElements,
             appState: shouldSyncSelection ? { selectedElementIds: targetSelection } : undefined,
-            captureUpdate: CaptureUpdateAction.NEVER,
+            captureUpdate: didManagedStructureChange
+                ? CaptureUpdateAction.IMMEDIATELY
+                : CaptureUpdateAction.NEVER,
         });
         requestAnimationFrame(() => {
             suppressOnChangeRef.current = false;
@@ -305,6 +382,9 @@ export default function Canvas() {
             const currentSceneElementsById = new Map(
                 sceneElements.map((element) => [element.id, element]),
             );
+            const previousSceneElementsById = new Map(
+                previousSceneElements.map((element) => [element.id, element]),
+            );
             const removedManagedNodeIds = new Set<string>();
             for (const previousElement of previousSceneElements) {
                 const removedNodeId = resolveManagedShapeNodeId(previousElement);
@@ -340,6 +420,36 @@ export default function Canvas() {
                 return;
             }
 
+            // Mirror Excalidraw history re-additions (undo delete / redo add)
+            // back into semantic state when nodes exist in the soft-delete pool.
+            const addedManagedNodeIds = new Set<string>();
+            for (const currentElement of sceneElements) {
+                const addedNodeId = resolveManagedShapeNodeId(currentElement);
+                if (!addedNodeId) continue;
+                const isDeletedNow = Boolean(
+                    (currentElement as ExcalidrawElement & { isDeleted?: boolean }).isDeleted,
+                );
+                if (isDeletedNow) continue;
+                const previousElement = previousSceneElementsById.get(currentElement.id);
+                const wasDeletedPreviously = previousElement
+                    ? Boolean((previousElement as ExcalidrawElement & { isDeleted?: boolean }).isDeleted)
+                    : true;
+                if (!previousElement || wasDeletedPreviously) {
+                    addedManagedNodeIds.add(addedNodeId);
+                }
+            }
+            if (addedManagedNodeIds.size > 0) {
+                let restoredAny = false;
+                for (const nodeId of addedManagedNodeIds) {
+                    const state = useMindmapStore.getState();
+                    if (state.nodes[nodeId]) continue;
+                    if (!state.deletedNodes[nodeId]) continue;
+                    restoreNode(nodeId);
+                    restoredAny = true;
+                }
+                if (restoredAny) return;
+            }
+
             const byId = new Map<string, ExcalidrawElement>();
             for (const element of sceneElements) {
                 byId.set(element.id, element);
@@ -356,6 +466,7 @@ export default function Canvas() {
                     if (currentSelected !== selectedManagedNodeId) {
                         selectNode(selectedManagedNodeId);
                     }
+
                 } else if (currentSelected !== null) {
                     selectNode(null);
                 }
@@ -363,6 +474,7 @@ export default function Canvas() {
                 selectNode(null);
             }
 
+            
             // --- Label sync ---
             for (const element of sceneElements) {
                 if (element.type !== 'text' || typeof element.text !== 'string') continue;
@@ -376,23 +488,29 @@ export default function Canvas() {
             }
 
             // --- Position sync ---
-            for (const element of sceneElements) {
-                if (!isManagedElement(element) || element.customData.role !== 'shape') continue;
-                const nodeId = element.customData.mindmapNodeId;
-                const currentNode = useMindmapStore.getState().nodes[nodeId];
-                if (!currentNode) continue;
-                const fallbackPosition = layout[nodeId];
-                const referencePosition = currentNode.position || fallbackPosition;
-                if (!referencePosition) continue;
-                const hasMoved =
-                    Math.abs(referencePosition.x - element.x) > POSITION_EPSILON ||
-                    Math.abs(referencePosition.y - element.y) > POSITION_EPSILON;
-                if (hasMoved) {
-                    setNodePosition(nodeId, { x: element.x, y: element.y });
+            if (!appState.selectedElementsAreBeingDragged) {
+                if (skipNextPositionSyncRef.current) {
+                    skipNextPositionSyncRef.current = false;
+                    return;
+                }
+                for (const element of sceneElements) {
+                    if (!isManagedElement(element) || element.customData.role !== 'shape') continue;
+                    const nodeId = element.customData.mindmapNodeId;
+                    const currentNode = useMindmapStore.getState().nodes[nodeId];
+                    if (!currentNode) continue;
+                    const fallbackPosition = layout[nodeId];
+                    const referencePosition = currentNode.position || fallbackPosition;
+                    if (!referencePosition) continue;
+                    const hasMoved =
+                        Math.abs(referencePosition.x - element.x) > POSITION_EPSILON ||
+                        Math.abs(referencePosition.y - element.y) > POSITION_EPSILON;
+                    if (hasMoved) {
+                        setNodePosition(nodeId, { x: element.x, y: element.y });
+                    }
                 }
             }
         },
-        [deleteNode, layout, projectedShapeIds, selectNode, setNodePosition, updateLabel, updateViewportTransform],
+        [deleteNode, layout, projectedShapeIds, restoreNode, selectNode, setNodePosition, updateLabel, updateViewportTransform],
     );
 
     // Handle label edit start (for keyboard shortcut)
@@ -427,11 +545,13 @@ export default function Canvas() {
         });
     }, [handleStartEdit]);
 
-    const createChildAndStartEdit = useCallback((parentNodeId: string) => {
+    const createChildNode = useCallback((parentNodeId: string, startEdit = false) => {
         // Defer store updates to avoid state updates during Excalidraw render transitions.
         requestAnimationFrame(() => {
             const newNodeId = addChild(parentNodeId);
-            scheduleStartEdit(newNodeId);
+            if (startEdit) {
+                scheduleStartEdit(newNodeId);
+            }
         });
     }, [addChild, scheduleStartEdit]);
 
@@ -609,6 +729,36 @@ export default function Canvas() {
         if (!api) return;
 
         const unsubscribe = api.onPointerUp((activeTool, pointerDownState, event) => {
+            // if the user is dragging a selection, we need to move the subtree 
+            if (activeTool.type === 'selection' && pointerDownState.drag.hasOccurred) {
+                const hitNodeId = resolveNodeIdFromHitElement(
+                    pointerDownState.hit.element as ExcalidrawElement | null,
+                );
+                const draggedNodeId = hitNodeId || resolveSelectedManagedNodeIdFromApi();
+                if (!draggedNodeId) return;
+
+                const draggedShapeId = `shape-${draggedNodeId}`;
+                const originalElement = pointerDownState.originalElements.get(draggedShapeId);
+                const currentElement = api.getSceneElements().find((element) => element.id === draggedShapeId);
+                if (!originalElement || !currentElement) return;
+
+                const dx = currentElement.x - originalElement.x;
+                const dy = currentElement.y - originalElement.y;
+                const hasMoved = Math.abs(dx) > POSITION_EPSILON || Math.abs(dy) > POSITION_EPSILON;
+                if (!hasMoved) return;
+
+                const fallbackPositions: Record<string, { x: number; y: number }> = {};
+                for (const [elementId, element] of pointerDownState.originalElements.entries()) {
+                    if (!elementId.startsWith('shape-')) continue;
+                    const nodeId = elementId.slice('shape-'.length);
+                    if (nodeId.length === 0) continue;
+                    fallbackPositions[nodeId] = { x: element.x, y: element.y };
+                }
+
+                skipNextPositionSyncRef.current = true;
+                moveSubTree(draggedNodeId, dx, dy, fallbackPositions);
+                return;
+            }
             if (activeTool.type !== 'selection') return;
             if (pointerDownState.drag.hasOccurred) return;
             if (event.button !== 0) return;
@@ -627,14 +777,15 @@ export default function Canvas() {
             const parentNodeId = hitNodeId || currentSelectedNodeId;
             if (!parentNodeId) return;
 
-            createChildAndStartEdit(parentNodeId);
+            createChildNode(parentNodeId, false);
         });
 
         return unsubscribe;
     }, [
         api,
-        createChildAndStartEdit,
+        createChildNode,
         isInteractiveTarget,
+        moveSubTree,
         resolveNodeIdFromHitElement,
         resolveSelectedManagedNodeIdFromApi,
     ]);
@@ -683,7 +834,7 @@ export default function Canvas() {
                         onClick={(event) => {
                             event.preventDefault();
                             event.stopPropagation();
-                            createChildAndStartEdit(button.nodeId);
+                            createChildNode(button.nodeId, false);
                         }}
                         style={{
                             position: 'absolute',
